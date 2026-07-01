@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <title>HTCondor Glidein Simulator</title>
+    <!-- Load stlite CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.31.1/build/stlite.css" />
+  </head>
+  <body>
+    <!-- The Streamlit app will be rendered inside this div -->
+    <div id="root"></div>
+    
+    <!-- Load stlite JS -->
+    <script src="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.31.1/build/stlite.js"></script>
+    <script>
+      stlite.mount(
+        {
+          requirements: [], // No extra pip packages needed for this script
+          entrypoint: "app.py",
+          files: {
+            "app.py": `
+import streamlit as st
+import time
+
+# -----------------------------------------------------------------------------
+# Configuration and Setup
+# -----------------------------------------------------------------------------
+st.set_page_config(
+    page_title="HTCondor Glidein Simulator",
+    page_icon="🦅",
+    layout="wide"
+)
+
+# Initialize Session State Variables
+if "slurm_queue" not in st.session_state:
+    st.session_state.slurm_queue = 0
+if "active_glideins" not in st.session_state:
+    st.session_state.active_glideins = 0
+if "htcondor_jobs" not in st.session_state:
+    st.session_state.htcondor_jobs = 0
+if "completed_tasks" not in st.session_state:
+    st.session_state.completed_tasks = 0
+
+# -----------------------------------------------------------------------------
+# State Mutation Callbacks
+# -----------------------------------------------------------------------------
+def submit_glidein():
+    """Simulate GlideinWMS submitting a pilot job to the Slurm queue."""
+    st.session_state.slurm_queue += 1
+
+def process_slurm():
+    """Simulate Slurm allocating resources to the pilot job."""
+    if st.session_state.slurm_queue > 0:
+        st.session_state.slurm_queue -= 1
+        st.session_state.active_glideins += 1
+
+def submit_payload():
+    """Simulate a user submitting actual work to HTCondor."""
+    st.session_state.htcondor_jobs += 5
+
+def idle_out():
+    """Simulate the glidein exiting after being idle or hitting a walltime limit."""
+    if st.session_state.active_glideins > 0:
+        st.session_state.active_glideins -= 1
+
+def reset_sim():
+    """Reset the simulator to initial conditions."""
+    st.session_state.slurm_queue = 0
+    st.session_state.active_glideins = 0
+    st.session_state.htcondor_jobs = 0
+    st.session_state.completed_tasks = 0
+
+# -----------------------------------------------------------------------------
+# Sidebar / Controls
+# -----------------------------------------------------------------------------
+with st.sidebar:
+    st.title("🎛️ Controls")
+    st.markdown("Use these controls to step through the Glidein lifecycle.")
+    
+    st.button("1. Submit Glidein to Slurm", on_click=submit_glidein, use_container_width=True)
+    st.button("2. Process Slurm Queue", on_click=process_slurm, type="primary", use_container_width=True)
+    st.button("3. Submit Payload to HTCondor", on_click=submit_payload, use_container_width=True)
+    
+    st.markdown("---")
+    st.button("Idle Out (Kill Glidein)", on_click=idle_out, use_container_width=True)
+    st.button("Reset Simulator", on_click=reset_sim, use_container_width=True)
+    
+    st.markdown("---")
+    st.markdown("""
+    **How it works:**
+    1. A pilot job (Glidein) is submitted to Slurm.
+    2. Slurm grants the resource, starting the Glidein.
+    3. The Glidein "phones home" to HTCondor, appearing as an available slot.
+    4. HTCondor streams user payloads to the active slot (Late Binding).
+    """)
+
+# -----------------------------------------------------------------------------
+# Main Dashboard UI
+# -----------------------------------------------------------------------------
+st.title("🦅 HTCondor-in-Slurm Lifecycle Simulator")
+st.markdown("Observe how Slurm provisions the bare metal, while HTCondor manages the actual execution environment.")
+
+# 1. HTCondor Central Manager Overlay
+st.markdown("""
+<div style="background-color: #e0f2fe; padding: 20px; border-radius: 10px; border: 2px solid #0ea5e9; margin-bottom: 20px;">
+    <h3 style="color: #0369a1; margin-top: 0;">🦅 HTCondor Central Manager (Overlay Network)</h3>
+    <p style="color: #0c4a6e; margin-bottom: 0;">Maintains the global queue of user payloads and listens for available resources.</p>
+</div>
+""", unsafe_allow_html=True)
+
+col1, col2, col3 = st.columns(3)
+col1.metric("HTCondor Payloads Waiting", st.session_state.htcondor_jobs)
+col2.metric("Active HTCondor Slots (Glideins)", st.session_state.active_glideins)
+col3.metric("Completed Tasks", st.session_state.completed_tasks)
+
+# 2. Active Execution (The Glideins)
+st.markdown("### 🔌 Active Resource Bindings")
+if st.session_state.active_glideins == 0:
+    st.info("No active glideins. Submit and process a glidein via Slurm to provision compute power.")
+else:
+    cols = st.columns(min(st.session_state.active_glideins, 8))
+    for i in range(st.session_state.active_glideins):
+        with cols[i % 8]:
+            if st.session_state.htcondor_jobs > 0:
+                st.markdown("""
+                <div style="background-color: #fef08a; padding: 15px; border-radius: 8px; text-align: center; border: 2px solid #ca8a04;">
+                    <h1 style="margin:0;">⚙️</h1>
+                    <p style="margin:0; font-size:14px; font-weight:bold; color: #a16207;">Executing</p>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown("""
+                <div style="background-color: #bbf7d0; padding: 15px; border-radius: 8px; text-align: center; border: 2px solid #16a34a;">
+                    <h1 style="margin:0;">🟢</h1>
+                    <p style="margin:0; font-size:14px; font-weight:bold; color: #15803d;">Idle Slot</p>
+                </div>
+                """, unsafe_allow_html=True)
+
+st.markdown("---")
+
+# 3. Slurm Underlying Infrastructure
+st.markdown("""
+<div style="background-color: #f3f4f6; padding: 20px; border-radius: 10px; border: 2px solid #9ca3af; margin-bottom: 10px;">
+    <h3 style="color: #374151; margin-top: 0;">🖥️ Underlying Slurm Cluster (Physical Resources)</h3>
+    <p style="color: #4b5563; margin-bottom: 0;">Manages bare-metal node allocations and queues the pilot scripts.</p>
+</div>
+""", unsafe_allow_html=True)
+
+st.metric("Slurm Jobs Queued (Pending Glideins)", st.session_state.slurm_queue)
+
+# -----------------------------------------------------------------------------
+# Execution Engine (Auto-Drain Loop)
+# -----------------------------------------------------------------------------
+if st.session_state.htcondor_jobs > 0 and st.session_state.active_glideins > 0:
+    jobs_to_process = min(st.session_state.htcondor_jobs, st.session_state.active_glideins)
+    time.sleep(0.7) 
+    st.session_state.htcondor_jobs -= jobs_to_process
+    st.session_state.completed_tasks += jobs_to_process
+    st.rerun()
+            `
+          }
+        },
+        document.getElementById("root")
+      );
+    </script>
+  </body>
+</html>
