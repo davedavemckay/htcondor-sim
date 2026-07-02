@@ -33,131 +33,198 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize Session State Variables
-if "slurm_queue" not in st.session_state:
-    st.session_state.slurm_queue = 0
-if "active_glideins" not in st.session_state:
-    st.session_state.active_glideins = 0
-if "htcondor_jobs" not in st.session_state:
-    st.session_state.htcondor_jobs = 0
-if "completed_tasks" not in st.session_state:
-    st.session_state.completed_tasks = 0
+# Initialize Complex State
+if "sim_state" not in st.session_state:
+    st.session_state.sim_state = {
+        "slurm_nodes": 4,
+        "node_cpus": 16,
+        "nodes": [],              # List of dicts: {id, total_cpus, used_cpus}
+        "slurm_queue": [],        # Pending glideins: {id, cpus}
+        "active_glideins": [],    # Running pilots: {id, cpus, used_cpus, node_id}
+        "htcondor_queue": [],     # User jobs: {id, cpus}
+        "active_jobs": [],        # Running jobs: {id, cpus, glidein_id, progress}
+        "completed_tasks": 0,
+        "next_g_id": 1,
+        "next_j_id": 1
+    }
+    # Provision initial physical nodes
+    s = st.session_state.sim_state
+    s["nodes"] = [{"id": f"N{i+1}", "total_cpus": 16, "used_cpus": 0} for i in range(4)]
+
+s = st.session_state.sim_state
 
 # -----------------------------------------------------------------------------
-# State Mutation Callbacks
+# Callbacks
 # -----------------------------------------------------------------------------
+def apply_cluster_config():
+    """Resets the cluster with new physical hardware dimensions."""
+    nodes = st.session_state.config_nodes
+    cpus = st.session_state.config_cpus
+    s["slurm_nodes"] = nodes
+    s["node_cpus"] = cpus
+    s["nodes"] = [{"id": f"N{i+1}", "total_cpus": cpus, "used_cpus": 0} for i in range(nodes)]
+    s["slurm_queue"].clear()
+    s["active_glideins"].clear()
+    s["htcondor_queue"].clear()
+    s["active_jobs"].clear()
+    s["completed_tasks"] = 0
+
 def submit_glidein():
-    """Simulate GlideinWMS submitting a pilot job to the Slurm queue."""
-    st.session_state.slurm_queue += 1
-
-def process_slurm():
-    """Simulate Slurm allocating resources to the pilot job."""
-    if st.session_state.slurm_queue > 0:
-        st.session_state.slurm_queue -= 1
-        st.session_state.active_glideins += 1
+    req_cpus = st.session_state.req_glidein_cpus
+    s["slurm_queue"].append({"id": f"Glidein-{s['next_g_id']}", "cpus": req_cpus})
+    s["next_g_id"] += 1
 
 def submit_payload():
-    """Simulate a user submitting actual work to HTCondor."""
-    st.session_state.htcondor_jobs += 5
+    req_cpus = st.session_state.req_job_cpus
+    count = st.session_state.req_job_count
+    for _ in range(count):
+        s["htcondor_queue"].append({"id": f"Job-{s['next_j_id']}", "cpus": req_cpus})
+        s["next_j_id"] += 1
 
 def idle_out():
-    """Simulate the glidein exiting after being idle or hitting a walltime limit."""
-    if st.session_state.active_glideins > 0:
-        st.session_state.active_glideins -= 1
-
-def reset_sim():
-    """Reset the simulator to initial conditions."""
-    st.session_state.slurm_queue = 0
-    st.session_state.active_glideins = 0
-    st.session_state.htcondor_jobs = 0
-    st.session_state.completed_tasks = 0
-
-# -----------------------------------------------------------------------------
-# Sidebar / Controls
-# -----------------------------------------------------------------------------
-with st.sidebar:
-    st.title("🎛️ Controls")
-    st.markdown("Use these controls to step through the Glidein lifecycle.")
-    
-    st.button("1. Submit Glidein to Slurm", on_click=submit_glidein, use_container_width=True)
-    st.button("2. Process Slurm Queue", on_click=process_slurm, type="primary", use_container_width=True)
-    st.button("3. Submit Payload to HTCondor", on_click=submit_payload, use_container_width=True)
-    
-    st.markdown("---")
-    st.button("Idle Out (Kill Glidein)", on_click=idle_out, use_container_width=True)
-    st.button("Reset Simulator", on_click=reset_sim, use_container_width=True)
-    
-    st.markdown("---")
-    st.markdown("""
-    **How it works:**
-    1. A pilot job (Glidein) is submitted to Slurm.
-    2. Slurm grants the resource, starting the Glidein.
-    3. The Glidein "phones home" to HTCondor, appearing as an available slot.
-    4. HTCondor streams user payloads to the active slot (Late Binding).
-    """)
-
-# -----------------------------------------------------------------------------
-# Main Dashboard UI
-# -----------------------------------------------------------------------------
-st.title("🦅 HTCondor-in-Slurm Lifecycle Simulator")
-st.markdown("Observe how Slurm provisions the bare metal, while HTCondor manages the actual execution environment.")
-
-# 1. HTCondor Central Manager Overlay
-st.markdown("""
-<div style="background-color: #e0f2fe; padding: 20px; border-radius: 10px; border: 2px solid #0ea5e9; margin-bottom: 20px;">
-    <h3 style="color: #0369a1; margin-top: 0;">🦅 HTCondor Central Manager (Overlay Network)</h3>
-    <p style="color: #0c4a6e; margin-bottom: 0;">Maintains the global queue of user payloads and listens for available resources.</p>
-</div>
-""", unsafe_allow_html=True)
-
-col1, col2, col3 = st.columns(3)
-col1.metric("HTCondor Payloads Waiting", st.session_state.htcondor_jobs)
-col2.metric("Active HTCondor Slots (Glideins)", st.session_state.active_glideins)
-col3.metric("Completed Tasks", st.session_state.completed_tasks)
-
-# 2. Active Execution (The Glideins)
-st.markdown("### 🔌 Active Resource Bindings")
-if st.session_state.active_glideins == 0:
-    st.info("No active glideins. Submit and process a glidein via Slurm to provision compute power.")
-else:
-    cols = st.columns(min(st.session_state.active_glideins, 8))
-    for i in range(st.session_state.active_glideins):
-        with cols[i % 8]:
-            if st.session_state.htcondor_jobs > 0:
-                st.markdown("""
-                <div style="background-color: #fef08a; padding: 15px; border-radius: 8px; text-align: center; border: 2px solid #ca8a04;">
-                    <h1 style="margin:0;">⚙️</h1>
-                    <p style="margin:0; font-size:14px; font-weight:bold; color: #a16207;">Executing</p>
-                </div>
-                """, unsafe_allow_html=True)
+    """Kill the oldest active glidein and requeue its running jobs."""
+    if s["active_glideins"]:
+        g = s["active_glideins"].pop(0)
+        # Free up CPUs on the physical Slurm Node
+        for n in s["nodes"]:
+            if n["id"] == g["node_id"]:
+                n["used_cpus"] -= g["cpus"]
+                break
+        
+        # Evict running jobs back to the HTCondor Queue (HTCondor handles this beautifully in real life)
+        jobs_to_keep = []
+        for j in s["active_jobs"]:
+            if j["glidein_id"] == g["id"]:
+                j["progress"] = 0
+                j["glidein_id"] = None
+                s["htcondor_queue"].insert(0, j) # Put back at front of queue
             else:
-                st.markdown("""
-                <div style="background-color: #bbf7d0; padding: 15px; border-radius: 8px; text-align: center; border: 2px solid #16a34a;">
-                    <h1 style="margin:0;">🟢</h1>
-                    <p style="margin:0; font-size:14px; font-weight:bold; color: #15803d;">Idle Slot</p>
-                </div>
-                """, unsafe_allow_html=True)
+                jobs_to_keep.append(j)
+        s["active_jobs"] = jobs_to_keep
+
+# -----------------------------------------------------------------------------
+# Scheduling Engine (The magic bin-packing)
+# -----------------------------------------------------------------------------
+needs_rerun = False
+
+# 1. Slurm Scheduler: Try to map pending Glideins to physical Slurm Nodes
+remaining_slurm_queue = []
+for g in s["slurm_queue"]:
+    scheduled = False
+    for n in s["nodes"]:
+        if n["total_cpus"] - n["used_cpus"] >= g["cpus"]:
+            n["used_cpus"] += g["cpus"]
+            s["active_glideins"].append({
+                "id": g["id"], "cpus": g["cpus"], "used_cpus": 0, "node_id": n["id"]
+            })
+            scheduled = True
+            needs_rerun = True
+            break
+    if not scheduled:
+        remaining_slurm_queue.append(g)
+s["slurm_queue"] = remaining_slurm_queue
+
+# 2. HTCondor Scheduler: Try to map pending User Jobs to Active Glideins
+remaining_htcondor_queue = []
+for j in s["htcondor_queue"]:
+    scheduled = False
+    for g in s["active_glideins"]:
+        if g["cpus"] - g["used_cpus"] >= j["cpus"]:
+            g["used_cpus"] += j["cpus"]
+            j["glidein_id"] = g["id"]
+            j["progress"] = 0
+            s["active_jobs"].append(j)
+            scheduled = True
+            needs_rerun = True
+            break
+    if not scheduled:
+        remaining_htcondor_queue.append(j)
+s["htcondor_queue"] = remaining_htcondor_queue
+
+# 3. Execution Engine: Advance running jobs
+if s["active_jobs"]:
+    needs_rerun = True
+    active_keeps = []
+    for j in s["active_jobs"]:
+        j["progress"] += 25 # takes 4 ticks to complete 100%
+        if j["progress"] >= 100:
+            s["completed_tasks"] += 1
+            # Free up CPUs on the active glidein
+            for g in s["active_glideins"]:
+                if g["id"] == j["glidein_id"]:
+                    g["used_cpus"] -= j["cpus"]
+                    break
+        else:
+            active_keeps.append(j)
+    s["active_jobs"] = active_keeps
+
+
+# -----------------------------------------------------------------------------
+# UI Render
+# -----------------------------------------------------------------------------
+st.title("🦅 Advanced HTCondor/Slurm Simulator")
+st.markdown("Explore **Bin-Packing**: Glideins reserve chunks of physical nodes. HTCondor jobs then pack into those reserved Glideins.")
+
+with st.sidebar:
+    st.header("1. Infrastructure")
+    st.slider("Physical Nodes", 1, 8, s["slurm_nodes"], key="config_nodes", on_change=apply_cluster_config)
+    st.slider("CPUs per Node", 4, 64, s["node_cpus"], step=4, key="config_cpus", on_change=apply_cluster_config)
+    
+    st.markdown("---")
+    st.header("2. Glidein Factory (Slurm)")
+    st.slider("Glidein Size (CPUs)", 1, s["node_cpus"], max(1, s["node_cpus"]//2), key="req_glidein_cpus")
+    st.button("Submit Glidein to Slurm", on_click=submit_glidein, use_container_width=True)
+    st.button("Kill Oldest Glidein", on_click=idle_out, use_container_width=True)
+
+    st.markdown("---")
+    st.header("3. User Workload (HTCondor)")
+    colA, colB = st.columns(2)
+    with colA: st.number_input("Payload CPUs", 1, s["node_cpus"], 2, key="req_job_cpus")
+    with colB: st.number_input("Batch Size", 1, 50, 5, key="req_job_count")
+    st.button("Submit Payloads to HTCondor", on_click=submit_payload, type="primary", use_container_width=True)
+
+# --- HTCONDOR OVERLAY ZONE ---
+st.markdown("### 🦅 HTCondor Overlay Network")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Queued Jobs", len(s["htcondor_queue"]))
+c2.metric("Queued CPUs", sum(j["cpus"] for j in s["htcondor_queue"]))
+c3.metric("Active Slots (Glideins)", len(s["active_glideins"]))
+c4.metric("Completed Tasks", s["completed_tasks"])
+
+if s["htcondor_queue"]:
+    st.warning(f"**Top of HTCondor Queue:** Next job requires **{s['htcondor_queue'][0]['cpus']} CPUs**. If no single Glidein has this much capacity, it will wait forever!")
+
+if not s["active_glideins"]:
+    st.info("No Active Glideins providing resources. Submit a Glidein from the sidebar.")
+else:
+    g_cols = st.columns(min(len(s["active_glideins"]), 4))
+    for i, g in enumerate(s["active_glideins"]):
+        with g_cols[i % 4]:
+            st.markdown(f"**{g['id']}** `(on {g['node_id']})`")
+            pct = min(g["used_cpus"] / g["cpus"], 1.0)
+            st.progress(pct, text=f"Running: {g['used_cpus']} / {g['cpus']} CPUs")
 
 st.markdown("---")
 
-# 3. Slurm Underlying Infrastructure
-st.markdown("""
-<div style="background-color: #f3f4f6; padding: 20px; border-radius: 10px; border: 2px solid #9ca3af; margin-bottom: 10px;">
-    <h3 style="color: #374151; margin-top: 0;">🖥️ Underlying Slurm Cluster (Physical Resources)</h3>
-    <p style="color: #4b5563; margin-bottom: 0;">Manages bare-metal node allocations and queues the pilot scripts.</p>
-</div>
-""", unsafe_allow_html=True)
+# --- SLURM PHYSICAL ZONE ---
+st.markdown("### 🖥️ Underlying Slurm Cluster (Hardware)")
 
-st.metric("Slurm Jobs Queued (Pending Glideins)", st.session_state.slurm_queue)
+if s["slurm_queue"]:
+    q_str = ", ".join([f"{g['id']} ({g['cpus']}C)" for g in s["slurm_queue"]])
+    st.warning(f"**Slurm Queue:** {q_str}. (Waiting for free CPUs on a single node)")
+else:
+    st.caption("Slurm Queue is empty.")
 
-# -----------------------------------------------------------------------------
-# Execution Engine (Auto-Drain Loop)
-# -----------------------------------------------------------------------------
-if st.session_state.htcondor_jobs > 0 and st.session_state.active_glideins > 0:
-    jobs_to_process = min(st.session_state.htcondor_jobs, st.session_state.active_glideins)
-    time.sleep(0.7) 
-    st.session_state.htcondor_jobs -= jobs_to_process
-    st.session_state.completed_tasks += jobs_to_process
+n_cols = st.columns(min(len(s["nodes"]), 4))
+for i, n in enumerate(s["nodes"]):
+    with n_cols[i % 4]:
+        st.markdown(f"**{n['id']}**")
+        pct = min(n["used_cpus"] / n["total_cpus"], 1.0)
+        st.progress(pct, text=f"Allocated: {n['used_cpus']} / {n['total_cpus']} CPUs")
+
+# Auto-drain animation loop
+if needs_rerun:
+    time.sleep(0.4) # Pause briefly so the user sees the progress bars animate
     st.rerun()
             `
           }
