@@ -157,13 +157,13 @@ if s["active_jobs"]:
             active_keeps.append(j)
     s["active_jobs"] = active_keeps
 
-# Engine Step 4: Idle Timeout Logic (30s)
+# Engine Step 4: Idle Timeout Logic (15s)
 active_keeps = []
 for g in s["active_glideins"]:
     if g["used_cpus"] == 0:
         if g.get("idle_since") is None:
             g["idle_since"] = current_time
-        elif current_time - g["idle_since"] >= 30:
+        elif current_time - g["idle_since"] >= 15:
             g["timeout"] = True
     else:
         g["idle_since"] = None
@@ -228,7 +228,7 @@ else:
             pct = min(g["used_cpus"] / g["cpus"], 1.0)
             if g.get("idle_since"):
                 idle_time = int(current_time - g["idle_since"])
-                st.progress(pct, text=f"Idle for {idle_time}s (Timeout at 30s)")
+                st.progress(pct, text=f"Idle for {idle_time}s (Timeout at 15s)")
             else:
                 st.progress(pct, text=f"Running: {g['used_cpus']} / {g['cpus']} CPUs")
 
@@ -279,7 +279,7 @@ html_grid += "</div>"
 st.markdown(html_grid, unsafe_allow_html=True)
 
 if needs_rerun:
-    time.sleep(0.4)
+    time.sleep(0.5)
     st.rerun()
             `
           }
