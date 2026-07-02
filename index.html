@@ -200,7 +200,7 @@ else:
     g_cols = st.columns(min(len(s["active_glideins"]), 4))
     for i, g in enumerate(s["active_glideins"]):
         with g_cols[i % 4]:
-            st.markdown(f"**{g['id']}** `(on {g['node_id']})`")
+            st.markdown(f"**{g['id']}** *(on {g['node_id']})*")
             pct = min(g["used_cpus"] / g["cpus"], 1.0)
             st.progress(pct, text=f"Running: {g['used_cpus']} / {g['cpus']} CPUs")
 
