@@ -5,148 +5,147 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
     <title>HTCondor Glidein Simulator</title>
-    <!-- Load stlite CSS (Updated Version) -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.73.0/build/stlite.css" />
   </head>
   <body>
-    <!-- The Streamlit app will be rendered inside this div -->
     <div id="root"></div>
     
-    <!-- Load stlite JS (Updated Version) -->
     <script src="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.73.0/build/stlite.js"></script>
     <script>
       stlite.mount(
         {
-          requirements: [], // No extra pip packages needed for this script
+          requirements: [],
           entrypoint: "app.py",
           files: {
             "app.py": `
 import streamlit as st
 import time
 
-# -----------------------------------------------------------------------------
-# Configuration and Setup
-# -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="HTCondor Glidein Simulator",
     page_icon="🦅",
     layout="wide"
 )
 
-# Initialize Complex State
-if "sim_state" not in st.session_state:
-    st.session_state.sim_state = {
-        "slurm_nodes": 4,
+# Hide default Streamlit styling for a cleaner dashboard look
+st.markdown("""
+    <style>
+        #MainMenu {visibility: hidden;}
+        header {visibility: hidden;}
+        footer {visibility: hidden;}
+        .block-container {padding-top: 2rem;}
+    </style>
+""", unsafe_allow_html=True)
+
+if "s" not in st.session_state:
+    st.session_state.s = {
+        "slurm_nodes": 6,
         "node_cpus": 16,
-        "nodes": [],              # List of dicts: {id, total_cpus, used_cpus}
+        "nodes": [],              # Physical nodes: {id, total_cpus, used_cpus}
         "slurm_queue": [],        # Pending glideins: {id, cpus}
-        "active_glideins": [],    # Running pilots: {id, cpus, used_cpus, node_id}
-        "htcondor_queue": [],     # User jobs: {id, cpus}
-        "active_jobs": [],        # Running jobs: {id, cpus, glidein_id, progress}
+        "active_glideins": [],    # Running glideins: {id, node_id, cpus, used_cpus, idle_since}
+        "htcondor_queue": [],     # Pending payloads: {id, cpus}
+        "active_jobs": [],        # Running payloads: {id, cpus, glidein_id, progress}
         "completed_tasks": 0,
         "next_g_id": 1,
-        "next_j_id": 1
+        "next_j_id": 1,
+        "auto_scale": True
     }
-    # Provision initial physical nodes
-    s = st.session_state.sim_state
-    s["nodes"] = [{"id": f"N{i+1}", "total_cpus": 16, "used_cpus": 0} for i in range(4)]
 
-s = st.session_state.sim_state
+s = st.session_state.s
 
-# -----------------------------------------------------------------------------
-# Callbacks
-# -----------------------------------------------------------------------------
-def apply_cluster_config():
-    """Resets the cluster with new physical hardware dimensions."""
-    nodes = st.session_state.config_nodes
-    cpus = st.session_state.config_cpus
-    s["slurm_nodes"] = nodes
-    s["node_cpus"] = cpus
-    s["nodes"] = [{"id": f"N{i+1}", "total_cpus": cpus, "used_cpus": 0} for i in range(nodes)]
-    s["slurm_queue"].clear()
-    s["active_glideins"].clear()
-    s["htcondor_queue"].clear()
-    s["active_jobs"].clear()
+# Re-provision physical nodes if slider values change
+if len(s["nodes"]) != s["slurm_nodes"] or (s["nodes"] and s["nodes"][0]["total_cpus"] != s["node_cpus"]):
+    s["nodes"] = [{"id": f"Node-{i+1}", "total_cpus": s["node_cpus"], "used_cpus": 0} for i in range(s["slurm_nodes"])]
+    s["slurm_queue"] = []
+    s["active_glideins"] = []
+    s["active_jobs"] = []
+    s["htcondor_queue"] = []
     s["completed_tasks"] = 0
+    s["next_g_id"] = 1
+    s["next_j_id"] = 1
 
-def submit_glidein():
-    req_cpus = st.session_state.req_glidein_cpus
-    s["slurm_queue"].append({"id": f"Glidein-{s['next_g_id']}", "cpus": req_cpus})
-    s["next_g_id"] += 1
-
-def submit_payload():
-    req_cpus = st.session_state.req_job_cpus
-    count = st.session_state.req_job_count
-    for _ in range(count):
-        s["htcondor_queue"].append({"id": f"Job-{s['next_j_id']}", "cpus": req_cpus})
-        s["next_j_id"] += 1
-
-def idle_out():
-    """Kill the oldest active glidein and requeue its running jobs."""
-    if s["active_glideins"]:
-        g = s["active_glideins"].pop(0)
-        # Free up CPUs on the physical Slurm Node
-        for n in s["nodes"]:
-            if n["id"] == g["node_id"]:
-                n["used_cpus"] -= g["cpus"]
-                break
+with st.sidebar:
+    st.title("🎛️ Controls")
+    
+    st.header("1. Infrastructure")
+    s["slurm_nodes"] = st.slider("Number of Slurm Nodes", 1, 20, s["slurm_nodes"])
+    s["node_cpus"] = st.slider("CPUs per Node", 4, 64, s["node_cpus"], step=4)
+    
+    st.markdown("---")
+    st.header("2. Glidein Factory (Slurm)")
+    s["auto_scale"] = st.toggle("Auto-Scaler (Demand-Driven)", s.get("auto_scale", True))
+    req_glidein_cpus = st.slider("Manual Glidein Size", 1, s["node_cpus"], max(1, s["node_cpus"]//2))
+    
+    if st.button("Submit Manual Glidein", use_container_width=True):
+        s["slurm_queue"].append({"id": f"Glidein-{s['next_g_id']}", "cpus": req_glidein_cpus})
+        s["next_g_id"] += 1
         
-        # Evict running jobs back to the HTCondor Queue (HTCondor handles this beautifully in real life)
-        jobs_to_keep = []
-        for j in s["active_jobs"]:
-            if j["glidein_id"] == g["id"]:
-                j["progress"] = 0
-                j["glidein_id"] = None
-                s["htcondor_queue"].insert(0, j) # Put back at front of queue
-            else:
-                jobs_to_keep.append(j)
-        s["active_jobs"] = jobs_to_keep
+    if st.button("Kill Oldest Glidein", use_container_width=True):
+        if s["active_glideins"]:
+            g = s["active_glideins"].pop(0)
+            # Free the physical Node
+            for n in s["nodes"]:
+                if n["id"] == g["node_id"]:
+                    n["used_cpus"] -= g["cpus"]
+                    break
+            # Return interrupted jobs back to the HTCondor Queue
+            active_keeps = []
+            for j in s["active_jobs"]:
+                if j["glidein_id"] == g["id"]:
+                    j["progress"] = 0
+                    s["htcondor_queue"].insert(0, j)
+                else:
+                    active_keeps.append(j)
+            s["active_jobs"] = active_keeps
 
-# -----------------------------------------------------------------------------
-# Scheduling Engine (The magic bin-packing)
-# -----------------------------------------------------------------------------
+    st.markdown("---")
+    st.header("3. Workload (HTCondor)")
+    payload_cpus = st.slider("Payload CPU Size", 1, s["node_cpus"], 2)
+    if st.button("Submit Payloads (x5)", type="primary", use_container_width=True):
+        for _ in range(5):
+            s["htcondor_queue"].append({"id": f"Job-{s['next_j_id']}", "cpus": payload_cpus})
+            s["next_j_id"] += 1
+
 needs_rerun = False
+current_time = time.time()
 
-# 1. Slurm Scheduler: Try to map pending Glideins to physical Slurm Nodes
-remaining_slurm_queue = []
-for g in s["slurm_queue"]:
-    scheduled = False
-    for n in s["nodes"]:
-        if n["total_cpus"] - n["used_cpus"] >= g["cpus"]:
-            n["used_cpus"] += g["cpus"]
-            s["active_glideins"].append({
-                "id": g["id"], "cpus": g["cpus"], "used_cpus": 0, "node_id": n["id"]
-            })
-            scheduled = True
-            needs_rerun = True
-            break
-    if not scheduled:
-        remaining_slurm_queue.append(g)
-s["slurm_queue"] = remaining_slurm_queue
+# Engine Step 1: Process Slurm Queue (Provision hardware)
+if s["slurm_queue"]:
+    for g in s["slurm_queue"][:]:
+        # Find a physical node with enough free CPUs for this pilot job
+        for n in s["nodes"]:
+            if n["total_cpus"] - n["used_cpus"] >= g["cpus"]:
+                n["used_cpus"] += g["cpus"]
+                g["node_id"] = n["id"]
+                g["used_cpus"] = 0
+                g["idle_since"] = current_time
+                s["active_glideins"].append(g)
+                s["slurm_queue"].remove(g)
+                needs_rerun = True
+                break
 
-# 2. HTCondor Scheduler: Try to map pending User Jobs to Active Glideins
-remaining_htcondor_queue = []
-for j in s["htcondor_queue"]:
-    scheduled = False
-    for g in s["active_glideins"]:
-        if g["cpus"] - g["used_cpus"] >= j["cpus"]:
-            g["used_cpus"] += j["cpus"]
-            j["glidein_id"] = g["id"]
-            j["progress"] = 0
-            s["active_jobs"].append(j)
-            scheduled = True
-            needs_rerun = True
-            break
-    if not scheduled:
-        remaining_htcondor_queue.append(j)
-s["htcondor_queue"] = remaining_htcondor_queue
+# Engine Step 2: HTCondor Late Binding (Bin-packing payloads into glideins)
+if s["htcondor_queue"] and s["active_glideins"]:
+    for j in s["htcondor_queue"][:]:
+        # Find a glidein slot big enough for the job
+        for g in s["active_glideins"]:
+            if g["cpus"] - g["used_cpus"] >= j["cpus"]:
+                g["used_cpus"] += j["cpus"]
+                g["idle_since"] = None # No longer idle!
+                j["glidein_id"] = g["id"]
+                j["progress"] = 0
+                s["active_jobs"].append(j)
+                s["htcondor_queue"].remove(j)
+                needs_rerun = True
+                break
 
-# 3. Execution Engine: Advance running jobs
+# Engine Step 3: Advance running jobs
 if s["active_jobs"]:
     needs_rerun = True
     active_keeps = []
     for j in s["active_jobs"]:
-        j["progress"] += 25 # takes 4 ticks to complete 100%
+        j["progress"] += 25 # takes 4 animation ticks to complete
         if j["progress"] >= 100:
             s["completed_tasks"] += 1
             # Free up CPUs on the active glidein
@@ -158,30 +157,55 @@ if s["active_jobs"]:
             active_keeps.append(j)
     s["active_jobs"] = active_keeps
 
+# Engine Step 4: Idle Timeout Logic (30s)
+active_keeps = []
+for g in s["active_glideins"]:
+    if g["used_cpus"] == 0:
+        if g.get("idle_since") is None:
+            g["idle_since"] = current_time
+        elif current_time - g["idle_since"] >= 30:
+            g["timeout"] = True
+    else:
+        g["idle_since"] = None
+        
+    if g.get("timeout"):
+        # Evict and free physical Slurm Node
+        for n in s["nodes"]:
+            if n["id"] == g["node_id"]:
+                n["used_cpus"] -= g["cpus"]
+                break
+    else:
+        active_keeps.append(g)
+        if g.get("idle_since") is not None:
+            needs_rerun = True # Keep rerunning to update the countdown UI
+s["active_glideins"] = active_keeps
 
-# -----------------------------------------------------------------------------
-# UI Render
-# -----------------------------------------------------------------------------
-st.title("🦅 HTCondor/Slurm Simulator")
-st.markdown("Explore **Bin-Packing**: Glideins reserve chunks of physical nodes. HTCondor jobs then pack into those reserved Glideins.")
-
-with st.sidebar:
-    st.header("1. Infrastructure")
-    st.slider("Physical Nodes", 1, 8, s["slurm_nodes"], key="config_nodes", on_change=apply_cluster_config)
-    st.slider("CPUs per Node", 4, 64, s["node_cpus"], step=4, key="config_cpus", on_change=apply_cluster_config)
+# Engine Step 5: Factory Auto-Scaler (Demand-Driven Provisioning)
+if s.get("auto_scale", True) and s["htcondor_queue"]:
+    max_job = max(j["cpus"] for j in s["htcondor_queue"])
+    max_glidein = max([g["cpus"] for g in s["active_glideins"]] + [g["cpus"] for g in s["slurm_queue"]] + [0])
     
-    st.markdown("---")
-    st.header("2. Glidein Factory (Slurm)")
-    st.slider("Glidein Size (CPUs)", 1, s["node_cpus"], max(1, s["node_cpus"]//2), key="req_glidein_cpus")
-    st.button("Submit Glidein to Slurm", on_click=submit_glidein, use_container_width=True)
-    st.button("Kill Oldest Glidein", on_click=idle_out, use_container_width=True)
+    if max_job > max_glidein:
+        # A stranded job exists! Submit a glidein large enough to fit it
+        if max_job <= s["node_cpus"]:
+            s["slurm_queue"].append({"id": f"Glidein-{s['next_g_id']}", "cpus": max_job})
+            s["next_g_id"] += 1
+            needs_rerun = True
+    else:
+        # Check if we just need more raw volume
+        idle_cpus = sum(g["cpus"] - g["used_cpus"] for g in s["active_glideins"])
+        pending_cpus = sum(g["cpus"] for g in s["slurm_queue"])
+        needed_cpus = sum(j["cpus"] for j in s["htcondor_queue"])
+        
+        if needed_cpus > (idle_cpus + pending_cpus):
+            # Don't exceed physical node count in the queue to prevent infinite queuing
+            if len(s["slurm_queue"]) < s["slurm_nodes"]:
+                s["slurm_queue"].append({"id": f"Glidein-{s['next_g_id']}", "cpus": s["node_cpus"]})
+                s["next_g_id"] += 1
+                needs_rerun = True
 
-    st.markdown("---")
-    st.header("3. User Workload (HTCondor)")
-    colA, colB = st.columns(2)
-    with colA: st.number_input("Payload CPUs", 1, s["node_cpus"], 2, key="req_job_cpus")
-    with colB: st.number_input("Batch Size", 1, 50, 5, key="req_job_count")
-    st.button("Submit Payloads to HTCondor", on_click=submit_payload, type="primary", use_container_width=True)
+st.title("🦅 Advanced HTCondor/Slurm Simulator")
+st.markdown("Explore **Bin-Packing** & **Late Binding**. Glideins reserve chunks of physical nodes. HTCondor jobs then dynamically pack into those active Glideins.")
 
 # --- HTCONDOR OVERLAY ZONE ---
 st.markdown("### 🦅 HTCondor Overlay Network")
@@ -192,17 +216,21 @@ c3.metric("Active Slots (Glideins)", len(s["active_glideins"]))
 c4.metric("Completed Tasks", s["completed_tasks"])
 
 if s["htcondor_queue"]:
-    st.warning(f"**Top of HTCondor Queue:** Next job requires **{s['htcondor_queue'][0]['cpus']} CPUs**. If no single Glidein has this much capacity, it will wait forever!")
+    st.warning(f"**Top of HTCondor Queue:** Next job requires **{s['htcondor_queue'][0]['cpus']} CPUs**.")
 
 if not s["active_glideins"]:
-    st.info("No Active Glideins providing resources. Submit a Glidein from the sidebar.")
+    st.info("No Active Glideins. Submit HTCondor payloads to watch the Auto-Scaler automatically provision resources!")
 else:
     g_cols = st.columns(min(len(s["active_glideins"]), 4))
     for i, g in enumerate(s["active_glideins"]):
         with g_cols[i % 4]:
             st.markdown(f"**{g['id']}** *(on {g['node_id']})*")
             pct = min(g["used_cpus"] / g["cpus"], 1.0)
-            st.progress(pct, text=f"Running: {g['used_cpus']} / {g['cpus']} CPUs")
+            if g.get("idle_since"):
+                idle_time = int(current_time - g["idle_since"])
+                st.progress(pct, text=f"Idle for {idle_time}s (Timeout at 30s)")
+            else:
+                st.progress(pct, text=f"Running: {g['used_cpus']} / {g['cpus']} CPUs")
 
 st.markdown("---")
 
@@ -215,16 +243,55 @@ if s["slurm_queue"]:
 else:
     st.caption("Slurm Queue is empty.")
 
-n_cols = st.columns(min(len(s["nodes"]), 4))
-for i, n in enumerate(s["nodes"]):
-    with n_cols[i % 4]:
-        st.markdown(f"**{n['id']}**")
-        pct = min(n["used_cpus"] / n["total_cpus"], 1.0)
-        st.progress(pct, text=f"Allocated: {n['used_cpus']} / {n['total_cpus']} CPUs")
+# Generate Responsive Proportional HTML Grid
+html_grid = '<div style="display: flex; flex-wrap: wrap; gap: 15px; margin-top: 10px;">'
+for n in s["nodes"]:
+    # Scale physical square size based on max CPU count
+    size = min(200, 60 + (n["total_cpus"] * 4)) 
+    
+    glidein_cpus = sum(g["cpus"] for g in s["active_glideins"] if g["node_id"] == n["id"])
+    payload_cpus = sum(g["used_cpus"] for g in s["active_glideins"] if g["node_id"] == n["id"])
+    
+    glidein_pct = min((glidein_cpus / n["total_cpus"]) * 100, 100)
+    payload_pct = min((payload_cpus / n["total_cpus"]) * 100, 100)
+    
+    # Store dynamic variables cleanly for the f-string to prevent JS parsing errors
+    node_id = n["id"]
+    total_cpus = n["total_cpus"]
+    
+    html_grid += f"""
+    <div style="width: {size}px; height: {size}px; background-color: #e5e7eb; border: 2px solid #9ca3af; border-radius: 8px; position: relative; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+        <!-- Reserved Glidein Space (Green) -->
+        <div style="position: absolute; bottom: 0; width: 100%; height: {glidein_pct}%; background-color: #86efac; transition: height 0.4s ease;"></div>
+        <!-- Active User Payload Space (Blue) -->
+        <div style="position: absolute; bottom: 0; width: 100%; height: {payload_pct}%; background-color: #3b82f6; transition: height 0.4s ease;"></div>
+        
+        <!-- Overlays -->
+        <div style="position: absolute; top: 8px; left: 8px; font-family: sans-serif; color: #1f2937;">
+            <strong style="font-size: 14px;">{node_id}</strong><br/>
+            <span style="font-size: 12px; font-weight: bold;">{total_cpus} CPUs</span><br/>
+        </div>
+        <div style="position: absolute; bottom: 4px; right: 8px; font-family: sans-serif; color: #1f2937; text-align: right; font-size: 10px; font-weight: 600;">
+            Glideins: {glidein_cpus}<br/>
+            Payloads: {payload_cpus}
+        </div>
+    </div>
+    """
+html_grid += '</div>'
 
-# Auto-drain animation loop
+# Visual Legend
+html_grid += '''
+<div style="margin-top: 20px; display: flex; gap: 15px; font-family: sans-serif; font-size: 12px; align-items: center; color: #374151;">
+    <div style="display: flex; align-items: center; gap: 5px;"><div style="width:12px; height:12px; background:#e5e7eb; border: 1px solid #9ca3af; border-radius:2px;"></div> Idle Node</div>
+    <div style="display: flex; align-items: center; gap: 5px;"><div style="width:12px; height:12px; background:#86efac; border-radius:2px;"></div> Glidein Reserved</div>
+    <div style="display: flex; align-items: center; gap: 5px;"><div style="width:12px; height:12px; background:#3b82f6; border-radius:2px;"></div> Payload Active</div>
+</div>
+'''
+
+st.markdown(html_grid, unsafe_allow_html=True)
+
 if needs_rerun:
-    time.sleep(0.4) # Pause briefly so the user sees the progress bars animate
+    time.sleep(0.4)
     st.rerun()
             `
           }
