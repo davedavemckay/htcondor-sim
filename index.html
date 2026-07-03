@@ -36,7 +36,7 @@ st.markdown("""
         #MainMenu {visibility: hidden;}
         header {visibility: hidden;}
         footer {visibility: hidden;}
-        .block-container {padding-top: 2rem;}
+        .block-container {padding-top: 1rem; padding-bottom: 1rem;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -302,30 +302,31 @@ c3.metric("Active Slots (Glideins)", len(s["active_glideins"]))
 c4.metric("Completed Tasks", s["completed_tasks"])
 c5.metric("CPU Efficiency", f"{current_eff:.1f}%")
 
-st.area_chart(s["eff_history"], height=150)
+st.area_chart(s["eff_history"], height=120)
 
 if s["htcondor_queue"]:
     top_job = s['htcondor_queue'][0]
     st.warning(f"**Top of HTCondor Queue:** Next job requires **{top_job['cpus']} CPUs** and **{top_job['mem']} GiB RAM**.")
 
-if not s["active_glideins"]:
-    st.info("No Active Glideins. Submit HTCondor payloads to watch the Auto-Scaler automatically provision resources!")
-else:
-    g_cols = st.columns(min(len(s["active_glideins"]), 4))
-    for i, g in enumerate(s["active_glideins"]):
-        with g_cols[i % 4]:
-            st.markdown(f"**{g['id']}** *(on {g['node_id']})*")
-            cpu_pct = min(g["used_cpus"] / g["cpus"], 1.0)
-            mem_pct = min(g["used_mem"] / g["mem"], 1.0)
-            
-            if g.get("idle_since"):
-                idle_time = int(current_time - g["idle_since"])
-                st.caption(f"⏱️ Idle for {idle_time}s (Timeout at 15s)")
-                st.progress(cpu_pct, text=f"CPU: {g['used_cpus']}/{g['cpus']}")
-                st.progress(mem_pct, text=f"MEM: {g['used_mem']}/{g['mem']}G")
-            else:
-                st.progress(cpu_pct, text=f"CPU: {g['used_cpus']}/{g['cpus']}")
-                st.progress(mem_pct, text=f"MEM: {g['used_mem']}/{g['mem']}G")
+with st.container(height=240):
+    if not s["active_glideins"]:
+        st.info("No Active Glideins. Submit HTCondor payloads to watch the Auto-Scaler automatically provision resources!")
+    else:
+        g_cols = st.columns(4)
+        for i, g in enumerate(s["active_glideins"]):
+            with g_cols[i % 4]:
+                st.markdown(f"**{g['id']}** *(on {g['node_id']})*")
+                cpu_pct = min(g["used_cpus"] / g["cpus"], 1.0)
+                mem_pct = min(g["used_mem"] / g["mem"], 1.0)
+                
+                if g.get("idle_since"):
+                    idle_time = int(current_time - g["idle_since"])
+                    st.caption(f"⏱️ Idle for {idle_time}s (Timeout at 15s)")
+                    st.progress(cpu_pct, text=f"CPU: {g['used_cpus']}/{g['cpus']}")
+                    st.progress(mem_pct, text=f"MEM: {g['used_mem']}/{g['mem']}G")
+                else:
+                    st.progress(cpu_pct, text=f"CPU: {g['used_cpus']}/{g['cpus']}")
+                    st.progress(mem_pct, text=f"MEM: {g['used_mem']}/{g['mem']}G")
 
 st.markdown("---")
 
