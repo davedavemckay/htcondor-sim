@@ -299,9 +299,9 @@ else:
     st.caption("Slurm Queue is empty.")
 
 # Generate Responsive Proportional HTML Grid
-html_grid = "<div style='display: flex; flex-wrap: wrap; gap: 15px; margin-top: 10px;'>"
+html_grid = "<div style='display: flex; flex-wrap: wrap; gap: 15px; margin-top: 10px; align-items: flex-end;'>"
 for n in s["nodes"]:
-    size = min(220, 80 + (n["total_cpus"] * 4)) 
+    size = 110 + (n["total_cpus"] * 0.75) 
     
     # Calculate CPU aggregation
     glidein_cpus = sum(g["cpus"] for g in s["active_glideins"] if g["node_id"] == n["id"])
