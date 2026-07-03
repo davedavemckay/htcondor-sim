@@ -62,13 +62,30 @@ if "s" not in st.session_state:
 
 s = st.session_state.s
 
-# Re-provision physical nodes if slider values change
-total_expected_mem = s["node_cpus"] * s["mem_per_core"]
-if (len(s["nodes"]) != s["slurm_nodes"] or 
-    (s["nodes"] and s["nodes"][0]["total_cpus"] != s["node_cpus"]) or 
-    (s["nodes"] and s["nodes"][0].get("total_mem", 0) != total_expected_mem)):
-    
-    s["nodes"] = [{"id": f"Node-{i+1}", "total_cpus": s["node_cpus"], "total_mem": total_expected_mem, "used_cpus": 0, "used_mem": 0} for i in range(s["slurm_nodes"])]
+# Helper to generate nodes based on mode
+def generate_nodes():
+    if s.get("arch_mode", "Homogeneous") == "Homogeneous":
+        mem = s.get("node_cpus", 16) * s.get("mem_per_core", 4)
+        return [{"id": f"Node-{i+1}", "total_cpus": s.get("node_cpus", 16), "total_mem": mem, "used_cpus": 0, "used_mem": 0} for i in range(s.get("slurm_nodes", 6))]
+    else:
+        nodes = []
+        for i in range(6):
+            nodes.append({"id": f"node0{i}", "total_cpus": 64, "total_mem": 256, "used_cpus": 0, "used_mem": 0})
+        for i in range(6):
+            nodes.append({"id": f"node1{i}", "total_cpus": 128, "total_mem": 512, "used_cpus": 0, "used_mem": 0})
+        return nodes
+
+expected_nodes = generate_nodes()
+needs_reset = False
+
+# Check if current nodes match expected configuration
+if len(s["nodes"]) != len(expected_nodes):
+    needs_reset = True
+elif s["nodes"] and expected_nodes and (s["nodes"][0]["total_cpus"] != expected_nodes[0]["total_cpus"] or s["nodes"][-1]["total_cpus"] != expected_nodes[-1]["total_cpus"]):
+    needs_reset = True
+
+if needs_reset:
+    s["nodes"] = expected_nodes
     s["slurm_queue"] = []
     s["active_glideins"] = []
     s["active_jobs"] = []
@@ -85,17 +102,28 @@ with st.sidebar:
     st.title("🎛️ Controls")
     
     st.header("1. Infrastructure")
-    s["slurm_nodes"] = st.slider("Number of Slurm Nodes", 1, 20, s["slurm_nodes"])
-    s["node_cpus"] = st.slider("CPUs per Node", 4, 64, s["node_cpus"], step=4)
-    s["mem_per_core"] = st.selectbox("Memory per Core (GiB)", [2, 4, 8], index=1)
+    s["arch_mode"] = st.radio("Cluster Architecture", ["Homogeneous", "Heterogeneous"])
+    
+    if s["arch_mode"] == "Homogeneous":
+        s["slurm_nodes"] = st.slider("Number of Slurm Nodes", 1, 20, s.get("slurm_nodes", 6))
+        s["node_cpus"] = st.slider("CPUs per Node", 4, 64, s.get("node_cpus", 16), step=4)
+        s["mem_per_core"] = st.selectbox("Memory per Core (GiB)", [2, 4, 8], index=1)
+        max_cluster_cpu = s["node_cpus"]
+        max_cluster_mem = s["node_cpus"] * s["mem_per_core"]
+    else:
+        st.info("Heterogeneous Mode: 6x (64C/256G) and 6x (128C/512G)")
+        max_cluster_cpu = 128
+        max_cluster_mem = 512
     
     st.markdown("---")
     st.header("2. Glidein Factory (Slurm)")
     s["auto_scale"] = st.toggle("Auto-Scaler (Demand-Driven)", s.get("auto_scale", True))
-    req_glidein_cpus = st.slider("Manual Glidein CPUs", 1, s["node_cpus"], max(1, s["node_cpus"]//2))
+    req_glidein_cpus = st.slider("Manual Glidein CPUs", 1, max_cluster_cpu, max(1, max_cluster_cpu//2))
     
     if st.button("Submit Manual Glidein", use_container_width=True):
-        req_glidein_mem = req_glidein_cpus * s["mem_per_core"]
+        req_glidein_mem = req_glidein_cpus * 4 
+        if s["arch_mode"] == "Homogeneous":
+            req_glidein_mem = req_glidein_cpus * s["mem_per_core"]
         s["slurm_queue"].append({"id": f"Glidein-{s['next_g_id']}", "cpus": req_glidein_cpus, "mem": req_glidein_mem})
         s["next_g_id"] += 1
         
@@ -120,8 +148,8 @@ with st.sidebar:
 
     st.markdown("---")
     st.header("3. Workload (HTCondor)")
-    payload_cpus = st.slider("Payload CPU Size", 1, s["node_cpus"], 2)
-    payload_mem = st.slider("Payload Memory (GiB)", 1, s["node_cpus"] * s["mem_per_core"], payload_cpus * 2)
+    payload_cpus = st.slider("Payload CPU Size", 1, max_cluster_cpu, 2)
+    payload_mem = st.slider("Payload Memory (GiB)", 1, max_cluster_mem, payload_cpus * 2)
     
     if st.button("Submit Payloads (x5)", type="primary", use_container_width=True):
         for _ in range(5):
@@ -216,10 +244,18 @@ if s.get("auto_scale", True) and s["htcondor_queue"]:
     max_glidein_cpu = max([g["cpus"] for g in s["active_glideins"]] + [g["cpus"] for g in s["slurm_queue"]] + [0])
     max_glidein_mem = max([g["mem"] for g in s["active_glideins"]] + [g["mem"] for g in s["slurm_queue"]] + [0])
     
+    max_cluster_cpu = max([n["total_cpus"] for n in s["nodes"]], default=0)
+    max_cluster_mem = max([n["total_mem"] for n in s["nodes"]], default=0)
+    
     if max_job_cpu > max_glidein_cpu or max_job_mem > max_glidein_mem:
         # Stranded job! Submit a custom glidein large enough to fit it
-        if max_job_cpu <= s["node_cpus"] and max_job_mem <= (s["node_cpus"] * s["mem_per_core"]):
-            s["slurm_queue"].append({"id": f"Glidein-{s['next_g_id']}", "cpus": max_job_cpu, "mem": max_job_mem})
+        if max_job_cpu <= max_cluster_cpu and max_job_mem <= max_cluster_mem:
+            if s.get("arch_mode") == "Heterogeneous":
+                g_cpu, g_mem = (128, 512) if max_job_cpu > 64 or max_job_mem > 256 else (64, 256)
+            else:
+                g_cpu, g_mem = s["node_cpus"], s["node_cpus"] * s["mem_per_core"]
+            
+            s["slurm_queue"].append({"id": f"Glidein-{s['next_g_id']}", "cpus": g_cpu, "mem": g_mem})
             s["next_g_id"] += 1
             needs_rerun = True
     else:
@@ -233,8 +269,12 @@ if s.get("auto_scale", True) and s["htcondor_queue"]:
         needed_mem = sum(j["mem"] for j in s["htcondor_queue"])
         
         if needed_cpus > (idle_cpus + pending_cpus) or needed_mem > (idle_mem + pending_mem):
-            if len(s["slurm_queue"]) < s["slurm_nodes"]:
-                s["slurm_queue"].append({"id": f"Glidein-{s['next_g_id']}", "cpus": s["node_cpus"], "mem": s["node_cpus"] * s["mem_per_core"]})
+            if len(s["slurm_queue"]) < len(s["nodes"]):
+                if s.get("arch_mode") == "Heterogeneous":
+                    g_cpu, g_mem = 64, 256
+                else:
+                    g_cpu, g_mem = s["node_cpus"], s["node_cpus"] * s["mem_per_core"]
+                s["slurm_queue"].append({"id": f"Glidein-{s['next_g_id']}", "cpus": g_cpu, "mem": g_mem})
                 s["next_g_id"] += 1
                 needs_rerun = True
 
