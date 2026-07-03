@@ -56,7 +56,8 @@ if "s" not in st.session_state:
         "completed_tasks": 0,
         "next_g_id": 1,
         "next_j_id": 1,
-        "auto_scale": True
+        "auto_scale": True,
+        "eff_history": []
     }
 
 s = st.session_state.s
@@ -75,6 +76,7 @@ if (len(s["nodes"]) != s["slurm_nodes"] or
     s["completed_tasks"] = 0
     s["next_g_id"] = 1
     s["next_j_id"] = 1
+    s["eff_history"] = []
 
 # -----------------------------------------------------------------------------
 # SIDEBAR CONTROLS
@@ -236,6 +238,14 @@ if s.get("auto_scale", True) and s["htcondor_queue"]:
                 s["next_g_id"] += 1
                 needs_rerun = True
 
+# Engine Step 6: Track CPU Efficiency
+current_alloc_cpu = sum(g["cpus"] for g in s["active_glideins"])
+current_used_cpu = sum(g["used_cpus"] for g in s["active_glideins"])
+current_eff = (current_used_cpu / current_alloc_cpu * 100) if current_alloc_cpu > 0 else 0.0
+
+s["eff_history"].append(current_eff)
+if len(s["eff_history"]) > 60:
+    s["eff_history"].pop(0)
 
 # -----------------------------------------------------------------------------
 # RENDER UI
@@ -245,11 +255,14 @@ st.markdown("Explore **Multi-Dimensional Bin-Packing**. Glideins reserve chunks 
 
 # --- HTCONDOR OVERLAY ZONE ---
 st.markdown("### 🦅 HTCondor Overlay Network")
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Queued Jobs", len(s["htcondor_queue"]))
 c2.metric("Queued Resources", f"{sum(j['cpus'] for j in s['htcondor_queue'])}C | {sum(j['mem'] for j in s['htcondor_queue'])}G")
 c3.metric("Active Slots (Glideins)", len(s["active_glideins"]))
 c4.metric("Completed Tasks", s["completed_tasks"])
+c5.metric("CPU Efficiency", f"{current_eff:.1f}%")
+
+st.area_chart(s["eff_history"], height=150)
 
 if s["htcondor_queue"]:
     top_job = s['htcondor_queue'][0]
