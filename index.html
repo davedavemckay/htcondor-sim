@@ -199,7 +199,7 @@ if s["active_jobs"]:
     needs_rerun = True
     active_keeps = []
     for j in s["active_jobs"]:
-        j["progress"] += 25 
+        j["progress"] += j.get("progress_rate", 25) 
         if j["progress"] >= 100:
             s["completed_tasks"] += 1
             # Free up CPUs and MEM on the active glidein
