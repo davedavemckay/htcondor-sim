@@ -118,12 +118,13 @@ with st.sidebar:
     st.markdown("---")
     st.header("2. Glidein Factory (Slurm)")
     s["auto_scale"] = st.toggle("Auto-Scaler (Demand-Driven)", s.get("auto_scale", True))
+    
+    default_mem_ratio = s["mem_per_core"] if s["arch_mode"] == "Homogeneous" else 4
+    
     req_glidein_cpus = st.slider("Manual Glidein CPUs", 1, max_cluster_cpu, max(1, max_cluster_cpu//2))
+    req_glidein_mem = st.slider("Manual Glidein Memory (GiB)", 1, max_cluster_mem, req_glidein_cpus * default_mem_ratio)
     
     if st.button("Submit Manual Glidein", use_container_width=True):
-        req_glidein_mem = req_glidein_cpus * 4 
-        if s["arch_mode"] == "Homogeneous":
-            req_glidein_mem = req_glidein_cpus * s["mem_per_core"]
         s["slurm_queue"].append({"id": f"Glidein-{s['next_g_id']}", "cpus": req_glidein_cpus, "mem": req_glidein_mem})
         s["next_g_id"] += 1
         
@@ -150,7 +151,7 @@ with st.sidebar:
     st.header("3. Workload (HTCondor)")
     payload_duration = st.radio("Payload Duration", ["Short", "Long"], horizontal=True)
     payload_cpus = st.slider("Payload CPU Size", 1, max_cluster_cpu, 2)
-    payload_mem = st.slider("Payload Memory (GiB)", 1, max_cluster_mem, payload_cpus * 2)
+    payload_mem = st.slider("Payload Memory (GiB)", 1, max_cluster_mem, payload_cpus * default_mem_ratio)
     
     progress_rate = 25 if payload_duration == "Short" else 5
     
@@ -299,7 +300,7 @@ if "tut_page" not in st.session_state:
 col_main, col_tut = st.columns([3, 1], gap="large")
 
 with col_main:
-    st.title("🦅 Advanced HTCondor/Slurm Simulator")
+    st.title("🦅 HTCondor/Slurm Simulator")
     st.markdown("Explore **Multi-Dimensional Bin-Packing**. Glideins reserve chunks of physical nodes. HTCondor jobs then dynamically pack into those active Glideins based on both **CPU** and **Memory** requirements.")
 
     # --- HTCONDOR OVERLAY ZONE ---
