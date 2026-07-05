@@ -36,7 +36,7 @@ st.markdown("""
         #MainMenu {visibility: hidden;}
         header {visibility: hidden;}
         footer {visibility: hidden;}
-        .block-container {padding-top: 1rem; padding-bottom: 1rem;}
+        .block-container {padding-top: 1rem; padding-bottom: 1rem; max-width: 95%;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -51,8 +51,8 @@ if "s" not in st.session_state:
         "nodes": [],              # Physical nodes: {id, total_cpus, total_mem, used_cpus, used_mem}
         "slurm_queue": [],        # Pending glideins: {id, cpus, mem}
         "active_glideins": [],    # Running glideins: {id, node_id, cpus, mem, used_cpus, used_mem, idle_since}
-        "htcondor_queue": [],     # Pending payloads: {id, cpus, mem}
-        "active_jobs": [],        # Running payloads: {id, cpus, mem, glidein_id, progress}
+        "htcondor_queue": [],     # Pending payloads: {id, cpus, mem, progress_rate}
+        "active_jobs": [],        # Running payloads: {id, cpus, mem, glidein_id, progress, progress_rate}
         "completed_tasks": 0,
         "next_g_id": 1,
         "next_j_id": 1,
@@ -148,12 +148,15 @@ with st.sidebar:
 
     st.markdown("---")
     st.header("3. Workload (HTCondor)")
+    payload_duration = st.radio("Payload Duration", ["Short", "Long"], horizontal=True)
     payload_cpus = st.slider("Payload CPU Size", 1, max_cluster_cpu, 2)
     payload_mem = st.slider("Payload Memory (GiB)", 1, max_cluster_mem, payload_cpus * 2)
     
+    progress_rate = 25 if payload_duration == "Short" else 5
+    
     if st.button("Submit Payloads (x5)", type="primary", use_container_width=True):
         for _ in range(5):
-            s["htcondor_queue"].append({"id": f"Job-{s['next_j_id']}", "cpus": payload_cpus, "mem": payload_mem})
+            s["htcondor_queue"].append({"id": f"Job-{s['next_j_id']}", "cpus": payload_cpus, "mem": payload_mem, "progress_rate": progress_rate})
             s["next_j_id"] += 1
 
 needs_rerun = False
@@ -414,12 +417,12 @@ with col_tut:
             st.markdown("#### 4. The Memory Bottleneck")
             st.markdown("Compute isn't just about CPU cores. Memory can bottleneck an entire node.")
             st.markdown("If a job requires 1 CPU but massive amounts of RAM, it will reserve the node's memory, stranding the remaining CPUs because no other jobs can fit.")
-            st.error("👉 **Try it:** Set Memory per Core to `2 GiB`. Set Payload CPU to `2`, but bump the Payload Memory to `32 GiB`. Submit it. Watch the memory (purple) max out, while CPUs (blue) sit mostly idle. Notice the **CPU Efficiency** drop!")
+            st.error("👉 **Try it:** Set Memory per Core to **2 GiB**. Set Payload CPU to 2, but bump the Payload Memory to **32 GiB**. Submit it. Watch the memory (purple) max out, while CPUs (blue) sit mostly idle. Notice the **CPU Efficiency** drop!")
         elif st.session_state.tut_page == 4:
             st.markdown("#### 5. Heterogeneous Hardware")
             st.markdown("In real datacenters, you have different sized nodes (e.g., 64-core vs 128-core).")
             st.markdown("HTCondor Glideins abstract this away. The user just asks for compute, and the Glidein Factory handles asking Slurm for the right node shape.")
-            st.success("👉 **Try it:** Switch Cluster Architecture to **Heterogeneous**. Submit a massive **100-CPU Payload**. Watch the Auto-Scaler specifically target the giant `node1x` series servers to fit the job!")
+            st.success("👉 **Try it:** Switch Cluster Architecture to **Heterogeneous**. Submit a massive **100-CPU Payload**. Watch the Auto-Scaler specifically target the giant **node1-series** servers to fit the job!")
         elif st.session_state.tut_page == 5:
             st.markdown("#### 6. Timeouts & Conclusion")
             st.markdown("Glideins idle out to save resources. After 15 seconds of 0% usage, they gracefully exit and return the node to Slurm.")
